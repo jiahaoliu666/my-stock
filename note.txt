@@ -1,3 +1,5 @@
 # 安裝並使用最新的 LTS 版本
 nvm install --lts
 nvm use --lts
+
+~
