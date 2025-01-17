@@ -1,6 +1,5 @@
 import type { NextApiRequest } from 'next';
-import { WebSocketServer } from 'ws';
-import type { WebSocket } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import { NextApiResponseServerIO } from '@/types/next';
 import { IncomingMessage } from 'http';
 import { Socket } from 'net';
@@ -15,8 +14,43 @@ interface QuoteItem {
   CDiff: string;
 }
 
-// 保存 WebSocket 服務器實例
+// 擴展 WebSocket 類型
+interface ExtendedWebSocket extends WebSocket {
+  isAlive?: boolean;
+}
+
+// 保存 WebSocket 服務器實例和活動連接
 let wsServer: WebSocketServer;
+const activeConnections = new Set<ExtendedWebSocket>();
+
+// 安全地發送數據
+function safeSend(ws: ExtendedWebSocket, data: any) {
+  if (ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify(data));
+    } catch (error) {
+      console.error('發送數據失敗:', error);
+      ws.terminate();
+      activeConnections.delete(ws);
+    }
+  }
+}
+
+// 廣播數據給所有活動連接
+async function broadcastData() {
+  try {
+    const data = await fetchFuturesData();
+    activeConnections.forEach(ws => {
+      if (ws.readyState === WebSocket.OPEN) {
+        safeSend(ws, data);
+      } else if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        activeConnections.delete(ws);
+      }
+    });
+  } catch (error) {
+    console.error('獲取或廣播數據失敗:', error);
+  }
+}
 
 export default async function handler(
   req: NextApiRequest,
@@ -24,7 +58,11 @@ export default async function handler(
 ) {
   if (!res.socket.server.ws) {
     // 初始化 WebSocket 服務器
-    wsServer = new WebSocketServer({ noServer: true });
+    wsServer = new WebSocketServer({ 
+      noServer: true,
+      clientTracking: false,
+      perMessageDeflate: false,
+    });
     res.socket.server.ws = wsServer;
 
     // 處理 WebSocket 升級
@@ -39,56 +77,82 @@ export default async function handler(
       }
     });
 
+    let broadcastInterval: NodeJS.Timeout;
+
     // WebSocket 連接處理
-    wsServer.on('connection', (ws: WebSocket) => {
+    wsServer.on('connection', (ws: ExtendedWebSocket) => {
       console.log('新的 WebSocket 連接');
+      ws.isAlive = true;
+      activeConnections.add(ws);
 
       // 立即發送一次數據
       fetchFuturesData()
-        .then(data => {
-          ws.send(JSON.stringify(data));
-        })
-        .catch(error => {
-          console.error('初始數據發送失敗:', error);
-        });
+        .then(data => safeSend(ws, data))
+        .catch(error => console.error('初始數據發送失敗:', error));
 
-      // 設置定時獲取數據
-      const interval = setInterval(async () => {
-        if (ws.readyState === ws.OPEN) {
-          try {
-            const data = await fetchFuturesData();
-            ws.send(JSON.stringify(data));
-          } catch (error) {
-            console.error('發送數據失敗:', error);
-          }
-        }
-      }, 1000);
+      // 如果是第一個連接，開始廣播
+      if (activeConnections.size === 1) {
+        broadcastInterval = setInterval(broadcastData, 1000);
+      }
 
       // 處理連接關閉
       ws.on('close', () => {
-        clearInterval(interval);
-        console.log('WebSocket 連接關閉');
+        activeConnections.delete(ws);
+        ws.isAlive = false;
+        console.log('WebSocket 連接關閉, 剩餘連接數:', activeConnections.size);
+        
+        // 如果沒有活動連接了，停止廣播
+        if (activeConnections.size === 0 && broadcastInterval) {
+          clearInterval(broadcastInterval);
+        }
       });
 
       // 處理錯誤
       ws.on('error', (error) => {
         console.error('WebSocket 錯誤:', error);
-        clearInterval(interval);
+        ws.isAlive = false;
+        activeConnections.delete(ws);
+        ws.terminate();
       });
 
       // 處理 ping 消息
       ws.on('message', (message: Buffer) => {
         try {
           const data = JSON.parse(message.toString());
-          if (data.type === 'ping') {
-            if (ws.readyState === ws.OPEN) {
-              ws.send(JSON.stringify({ type: 'pong' }));
-            }
+          if (data.type === 'ping' && ws.readyState === WebSocket.OPEN) {
+            safeSend(ws, { type: 'pong' });
           }
         } catch (error) {
           console.error('處理消息失敗:', error);
         }
       });
+
+      // 設置 ping/pong
+      ws.on('pong', () => {
+        ws.isAlive = true;
+      });
+    });
+
+    // 定期檢查連接狀態
+    const pingInterval = setInterval(() => {
+      activeConnections.forEach(ws => {
+        if (ws.isAlive === false) {
+          activeConnections.delete(ws);
+          return ws.terminate();
+        }
+        ws.isAlive = false;
+        try {
+          ws.ping();
+        } catch (error) {
+          console.error('ping 失敗:', error);
+          ws.terminate();
+          activeConnections.delete(ws);
+        }
+      });
+    }, 30000);
+
+    wsServer.on('close', () => {
+      clearInterval(pingInterval);
     });
   }
 

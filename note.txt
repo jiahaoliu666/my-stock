@@ -2,4 +2,4 @@
 nvm install --lts
 nvm use --lts
 
-~
+websock 一直連接開啟又關閉
