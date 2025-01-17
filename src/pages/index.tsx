@@ -1,114 +1,129 @@
-import Image from "next/image";
-import { Geist, Geist_Mono } from "next/font/google";
+import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
+import TradingSignals from '@/components/TradingSignals';
+import { getFuturesData, type FuturesData, type ChartData } from '@/services/futuresService';
+import type { SignalResult } from '@/services/tradingSignals';
+import ChartWidget from '@/components/ChartWidget';
+import RealtimeQuote from '../components/RealtimeQuote';
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+interface ExtendedFuturesData extends FuturesData {
+  signal?: SignalResult;
+}
 
 export default function Home() {
-  return (
-    <div
-      className={`${geistSans.variable} ${geistMono.variable} grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]`}
-    >
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/pages/index.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+  const [futuresData, setFuturesData] = useState<ExtendedFuturesData>({
+    price: '---',
+    change: '---',
+    changePercent: '---',
+    volume: '---',
+    updateTime: '---',
+    isMarketOpen: false,
+    chartData: []
+  });
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const [prevPrice, setPrevPrice] = useState<string>('---');
+  const [isLoading, setIsLoading] = useState(true);
+
+  const updateFuturesData = async () => {
+    try {
+      setPrevPrice(futuresData.price);
+      const data = await getFuturesData();
+      setFuturesData(data);
+      setIsLoading(false);
+    } catch (error) {
+      console.error('更新期貨數據失敗:', error);
+      // 保持現有數據，只更新時間
+      setFuturesData(prev => ({
+        ...prev,
+        updateTime: new Date().toLocaleTimeString('zh-TW')
+      }));
+    }
+  };
+
+  useEffect(() => {
+    // 首次載入時更新數據
+    updateFuturesData();
+
+    // 設置定時更新（每30秒更新一次）
+    const interval = setInterval(updateFuturesData, 30000);
+
+    // 清理定時器
+    return () => clearInterval(interval);
+  }, []);
+
+  // 計算價格變化的顏色
+  const getPriceColor = () => {
+    if (prevPrice === '---' || futuresData.price === '---') return 'text-gray-900';
+    return Number(futuresData.price) > Number(prevPrice) ? 'text-red-600' : 'text-green-600';
+  };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-xl">載入中...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <main className="container mx-auto px-4 py-8">
+        <h1 className="text-3xl font-bold mb-8">台指期即時行情</h1>
+        
+        {/* 主要報價區 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl font-semibold">即時報價</h2>
+              <div className="flex items-center space-x-2">
+                <span className={`w-2 h-2 rounded-full ${futuresData.isMarketOpen ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                <span className="text-sm text-gray-500">
+                  {futuresData.isMarketOpen ? '盤中' : '已收盤'} • 
+                  最後更新：{futuresData.updateTime}
+                </span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-gray-600">現價</p>
+                <p className={`text-3xl font-bold ${getPriceColor()}`}>
+                  {futuresData.price}
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-600">漲跌</p>
+                <p className={`text-2xl font-bold ${parseFloat(futuresData.change) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {futuresData.change} ({futuresData.changePercent}%)
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-600">成交量</p>
+                <p className="text-xl">{futuresData.volume}</p>
+              </div>
+            </div>
+          </div>
+          
+          {/* 交易訊號區 */}
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <TradingSignals signal={futuresData.signal} />
+          </div>
         </div>
+
+        {/* K線圖區域 */}
+        <div className="bg-white p-6 rounded-lg shadow-lg mb-8">
+          <h2 className="text-2xl font-semibold mb-4">K線圖</h2>
+          <div className="h-[600px]">
+            {futuresData.chartData && futuresData.chartData.length > 0 && (
+              <ChartWidget 
+                data={futuresData.chartData} 
+                currentPrice={Number(futuresData.price)}
+              />
+            )}
+          </div>
+        </div>
+
+        <RealtimeQuote />
       </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
     </div>
   );
 }
